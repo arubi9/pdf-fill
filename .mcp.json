@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "pdf-fill": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/avner/Documents/GitHub/pdf-fill", "pdf-fill"],
+      "env": {}
+    }
+  }
+}
