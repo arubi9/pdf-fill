@@ -553,7 +553,41 @@ def analyze_table(
 
 
 def main():
-    mcp.run(transport="stdio")
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="PDF-Fill MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default=os.environ.get("MCP_TRANSPORT", "stdio"),
+        help="Transport protocol (default: stdio, or set MCP_TRANSPORT env var)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("MCP_HOST", "0.0.0.0"),
+        help="Host to bind to (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("MCP_PORT", "8000")),
+        help="Port to listen on (default: 8000)",
+    )
+    args = parser.parse_args()
+
+    mcp.settings.host = args.host
+    mcp.settings.port = args.port
+
+    # Disable DNS rebinding protection for remote deployments
+    if args.transport != "stdio":
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":
