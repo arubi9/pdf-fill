@@ -11,43 +11,65 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 RENDER_DPI = 200  # Resolution for PDF/DOCX rendering
 
 
-def render_file(file_path: str, dpi: int = RENDER_DPI) -> list[Image.Image]:
-    """Open a file and return a list of PIL Images (one per page)."""
+def render_file(
+    file_path: str,
+    dpi: int = RENDER_DPI,
+    return_dimensions: bool = False,
+) -> list[Image.Image] | tuple[list[Image.Image], list[tuple[float, float]]]:
+    """Open a file and return a list of PIL Images (one per page).
+
+    When *return_dimensions* is True, also return the original page dimensions
+    (width, height) in PDF points (for PDFs/DOCX) or pixels (for images).
+    """
     path = Path(file_path)
     ext = path.suffix.lower()
 
     if ext in IMAGE_EXTENSIONS:
-        return [Image.open(file_path).convert("RGB")]
+        img = Image.open(file_path).convert("RGB")
+        pages = [img]
+        dims = [(float(img.width), float(img.height))]
     elif ext == ".pdf":
-        return _render_pdf(file_path, dpi)
+        pages, dims = _render_pdf(file_path, dpi)
     elif ext in (".docx", ".doc"):
-        return _render_docx(file_path, dpi)
+        pages, dims = _render_docx(file_path, dpi)
     else:
         raise ValueError(f"Unsupported file format: {ext}")
 
+    if return_dimensions:
+        return pages, dims
+    return pages
 
-def _render_pdf(file_path: str, dpi: int) -> list[Image.Image]:
-    """Render each PDF page as a PIL Image."""
+
+def _render_pdf(
+    file_path: str, dpi: int
+) -> tuple[list[Image.Image], list[tuple[float, float]]]:
+    """Render each PDF page as a PIL Image and collect original dimensions."""
     doc = pymupdf.open(file_path)
-    pages = []
+    pages: list[Image.Image] = []
+    dims: list[tuple[float, float]] = []
     for page in doc:
+        dims.append((float(page.rect.width), float(page.rect.height)))
         pix = page.get_pixmap(dpi=dpi)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         pages.append(img)
     doc.close()
-    return pages
+    return pages, dims
 
 
-def _render_docx(file_path: str, dpi: int) -> list[Image.Image]:
+def _render_docx(
+    file_path: str, dpi: int
+) -> tuple[list[Image.Image], list[tuple[float, float]]]:
     """Convert DOCX to PDF via PyMuPDF's built-in conversion, then render."""
     doc = pymupdf.open(file_path)
-    pages = []
+    pages: list[Image.Image] = []
+    dims: list[tuple[float, float]] = []
     for page in doc:
+        dims.append((float(page.rect.width), float(page.rect.height)))
         pix = page.get_pixmap(dpi=dpi)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         pages.append(img)
     doc.close()
-    return pages
+    return pages, dims
 
 
 def detect_format(file_path: str) -> str:

@@ -18,6 +18,17 @@ def _get_font(font_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
             return ImageFont.load_default(size=font_size)
 
 
+def measure_text_bbox(text: str, font_size: int = 16) -> dict:
+    """Measure the bounding box of text without drawing it.
+    Returns dict with keys: width, height (in pixels)."""
+    font = _get_font(font_size)
+    bbox = font.getbbox(text)
+    return {
+        "width": bbox[2] - bbox[0],
+        "height": bbox[3] - bbox[1],
+    }
+
+
 def draw_text_on_image(
     img: Image.Image,
     x: float,

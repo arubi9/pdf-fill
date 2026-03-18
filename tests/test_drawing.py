@@ -7,6 +7,7 @@ from pdf_fill.drawing import (
     draw_highlight_on_image,
     erase_region_on_image,
     fill_checkbox_on_image,
+    measure_text_bbox,
 )
 
 
@@ -48,3 +49,17 @@ def test_erase_region(canvas):
 def test_fill_checkbox(canvas):
     result = fill_checkbox_on_image(canvas, x=50, y=50, size=20, style="check", color="black")
     assert result.getpixel((53, 48)) != (255, 255, 255)
+
+
+def test_measure_text_bbox():
+    bbox = measure_text_bbox("Hello World", font_size=16)
+    assert bbox["width"] > 0
+    assert bbox["height"] > 0
+    assert bbox["width"] > bbox["height"]
+
+
+def test_measure_text_bbox_scales_with_font():
+    small = measure_text_bbox("Hello", font_size=12)
+    large = measure_text_bbox("Hello", font_size=24)
+    assert large["width"] > small["width"]
+    assert large["height"] > small["height"]

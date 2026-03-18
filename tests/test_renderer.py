@@ -37,6 +37,28 @@ def test_render_pdf(tmp_path):
     assert pages[0].size[0] > 0
 
 
+def test_render_pdf_returns_dimensions(tmp_path):
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((72, 72), "Hello PDF")
+    pdf_path = tmp_path / "test.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+    pages, dims = render_file(str(pdf_path), return_dimensions=True)
+    assert len(pages) == 1
+    assert dims[0] == (612.0, 792.0)
+
+
+def test_render_image_returns_pixel_dimensions(tmp_path):
+    from PIL import Image
+    img = Image.new("RGB", (400, 300), "blue")
+    path = tmp_path / "test.png"
+    img.save(path)
+    pages, dims = render_file(str(path), return_dimensions=True)
+    assert dims[0] == (400.0, 300.0)
+
+
 def test_render_unsupported(tmp_path):
     path = tmp_path / "test.xyz"
     path.write_text("not a doc")

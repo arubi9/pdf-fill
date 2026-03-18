@@ -9,15 +9,31 @@ import pymupdf
 from PIL import Image
 
 
-def export_as_pdf(pages: list[Image.Image], output_path: str) -> str:
-    """Save pages as a PDF file. Returns the output path."""
+def export_as_pdf(
+    pages: list[Image.Image],
+    output_path: str,
+    page_dimensions: list[tuple[float, float]] | None = None,
+) -> str:
+    """Save pages as a PDF file. Returns the output path.
+
+    Args:
+        pages: List of PIL images to include as PDF pages.
+        output_path: Destination file path for the PDF.
+        page_dimensions: Optional list of (width, height) tuples in PDF points
+            (72 per inch) for each page.  When provided, the PDF page is created
+            at the given point size and the image is scaled to fit.  When *None*,
+            the pixel dimensions of each image are used (backward compatible).
+    """
     doc = pymupdf.open()
-    for img in pages:
+    for i, img in enumerate(pages):
         img_bytes = _pil_to_png_bytes(img)
-        w, h = img.size
-        page = doc.new_page(width=w, height=h)
-        page.insert_image(pymupdf.Rect(0, 0, w, h), stream=img_bytes)
-    doc.save(output_path)
+        if page_dimensions is not None and i < len(page_dimensions):
+            pw, ph = page_dimensions[i]
+        else:
+            pw, ph = float(img.size[0]), float(img.size[1])
+        page = doc.new_page(width=pw, height=ph)
+        page.insert_image(pymupdf.Rect(0, 0, pw, ph), stream=img_bytes)
+    doc.save(output_path, deflate=True, deflate_images=True)
     doc.close()
     return output_path
 
