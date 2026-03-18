@@ -39,13 +39,13 @@ def _extract_from_pdf(source_path: str, page_num: int, dpi: int) -> list[dict]:
     """Extract text from PDF using PyMuPDF's text layer."""
     scale = dpi / 72.0
     doc = pymupdf.open(source_path)
-    if page_num >= len(doc):
+    try:
+        if page_num >= len(doc):
+            return []
+        page = doc[page_num]
+        data = page.get_text("dict")
+    finally:
         doc.close()
-        return []
-
-    page = doc[page_num]
-    data = page.get_text("dict")
-    doc.close()
 
     lines = []
     for block in data["blocks"]:
@@ -84,35 +84,35 @@ def _extract_from_pdf(source_path: str, page_num: int, dpi: int) -> list[dict]:
                 })
 
     # Merge side-by-side lines (e.g., "1." at x=100 and "Question text?" at x=200
-    # on the same Y coordinate). PyMuPDF puts these in separate line entries.
+    # on the same Y coordinate). PyMuPDF splits these into separate line entries.
+    # Uses a while-loop to handle 3+ fragments on the same line (not just pairs).
     merged = []
-    skip = set()
-    for i, line in enumerate(lines):
-        if i in skip:
-            continue
-        # Check if next line overlaps vertically (within 10px) = side-by-side
-        if i + 1 < len(lines):
+    i = 0
+    while i < len(lines):
+        current = dict(lines[i])
+        while i + 1 < len(lines):
             nxt = lines[i + 1]
             vertical_overlap = (
-                abs(line["bbox"][1] - nxt["bbox"][1]) < 10
-                and abs(line["bbox"][3] - nxt["bbox"][3]) < 10
+                abs(current["bbox"][1] - nxt["bbox"][1]) < 10
+                and abs(current["bbox"][3] - nxt["bbox"][3]) < 10
             )
-            if vertical_overlap and line["bbox"][2] < nxt["bbox"][0]:
-                # Merge: combine text, expand bbox
-                merged.append({
-                    "text": line["text"] + " " + nxt["text"],
+            if vertical_overlap and current["bbox"][2] < nxt["bbox"][0]:
+                current = {
+                    "text": current["text"] + " " + nxt["text"],
                     "bbox": [
-                        min(line["bbox"][0], nxt["bbox"][0]),
-                        min(line["bbox"][1], nxt["bbox"][1]),
-                        max(line["bbox"][2], nxt["bbox"][2]),
-                        max(line["bbox"][3], nxt["bbox"][3]),
+                        min(current["bbox"][0], nxt["bbox"][0]),
+                        min(current["bbox"][1], nxt["bbox"][1]),
+                        max(current["bbox"][2], nxt["bbox"][2]),
+                        max(current["bbox"][3], nxt["bbox"][3]),
                     ],
-                    "font_size": max(line["font_size"], nxt["font_size"]),
-                    "is_bold": line["is_bold"] or nxt["is_bold"],
-                })
-                skip.add(i + 1)
-                continue
-        merged.append(line)
+                    "font_size": max(current["font_size"], nxt["font_size"]),
+                    "is_bold": current["is_bold"] or nxt["is_bold"],
+                }
+                i += 1
+            else:
+                break
+        merged.append(current)
+        i += 1
 
     return merged
 
@@ -154,7 +154,7 @@ def classify_elements(
         bbox = line["bbox"]
 
         # --- Checkbox detection: "[ ] Label" patterns ---
-        checkbox_matches = list(re.finditer(r'\[\s*\]\s*(\w[\w\s]*?)(?=\s*\[|$)', text))
+        checkbox_matches = list(re.finditer(r'\[\s*\]\s*([^\[\]]+?)(?=\s*\[|$)', text))
         if checkbox_matches:
             for match in checkbox_matches:
                 label = match.group(1).strip()

@@ -16,7 +16,7 @@ class DocumentState:
         self.source_format: str | None = None
         self.page_dimensions: list[tuple[float, float]] = []
         self.render_dpi: int = 200
-        self._structure_cache: dict[int, dict | None] = {}
+        self._structure_cache: dict[int, list[dict]] = {}
 
     @property
     def page_count(self) -> int:
@@ -90,10 +90,10 @@ class DocumentState:
         """Return all pages."""
         return list(self._pages)
 
-    def get_structure(self, page_num: int) -> dict | None:
+    def get_structure(self, page_num: int) -> list[dict] | None:
         """Return cached structure for a page, or None if not cached."""
         return self._structure_cache.get(page_num)
 
-    def set_structure(self, page_num: int, structure: dict | None) -> None:
+    def set_structure(self, page_num: int, structure: list[dict]) -> None:
         """Cache structure analysis results for a page."""
         self._structure_cache[page_num] = structure

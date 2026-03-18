@@ -239,13 +239,16 @@ def merge_documents(file_paths: str) -> str:
     """
     paths = [p.strip() for p in file_paths.split(",")]
     all_pages = _state.get_all_pages()
+    all_dims = list(_state.page_dimensions)
     for path in paths:
-        new_pages = render_file(path)
+        new_pages, new_dims = render_file(path, return_dimensions=True)
         all_pages.extend(new_pages)
+        all_dims.extend(new_dims)
     _state.load_pages(
         all_pages,
         source_path=_state.source_path or paths[0],
         source_format=_state.source_format or "pdf",
+        page_dimensions=all_dims,
     )
     return f"Merged. Total pages: {_state.page_count}"
 
