@@ -23,12 +23,15 @@ def extract_text_lines(
         text: str, bbox: [x1, y1, x2, y2] in pixel coords at given DPI,
         font_size: float, is_bold: bool
     """
-    if source_path and source_path.lower().endswith(".pdf"):
-        lines = _extract_from_pdf(source_path, page_num, dpi)
-        if lines:
-            return lines
+    # Try PyMuPDF text extraction for PDFs and DOCX (any format it can open)
+    if source_path:
+        ext = source_path.lower().rsplit(".", 1)[-1] if "." in source_path else ""
+        if ext in ("pdf", "docx", "doc"):
+            lines = _extract_from_pdf(source_path, page_num, dpi)
+            if lines:
+                return lines
 
-    # Fallback to Surya OCR for scanned docs or images
+    # Fallback to Surya OCR for scanned docs, images, or docs with no text layer
     if fallback_image is not None:
         return _extract_with_ocr(fallback_image)
 
@@ -36,8 +39,23 @@ def extract_text_lines(
 
 
 def _extract_from_pdf(source_path: str, page_num: int, dpi: int) -> list[dict]:
-    """Extract text from PDF using PyMuPDF's text layer."""
+    """Extract text from PDF/DOCX using PyMuPDF's text layer."""
     scale = dpi / 72.0
+
+    # Old .doc format: convert to .docx first (same as renderer)
+    if source_path.lower().endswith(".doc") and not source_path.lower().endswith(".docx"):
+        import subprocess
+        import tempfile
+        try:
+            tmp_docx = tempfile.mktemp(suffix=".docx")
+            subprocess.run(
+                ["textutil", "-convert", "docx", source_path, "-output", tmp_docx],
+                check=True, capture_output=True,
+            )
+            source_path = tmp_docx
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return []
+
     doc = pymupdf.open(source_path)
     try:
         if page_num >= len(doc):

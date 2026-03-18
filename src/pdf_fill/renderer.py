@@ -59,7 +59,28 @@ def _render_pdf(
 def _render_docx(
     file_path: str, dpi: int
 ) -> tuple[list[Image.Image], list[tuple[float, float]]]:
-    """Convert DOCX to PDF via PyMuPDF's built-in conversion, then render."""
+    """Render DOCX/DOC via PyMuPDF. For old .doc, convert to .docx first."""
+    import subprocess
+    import tempfile
+
+    path = Path(file_path)
+
+    # Old .doc format: try converting to .docx with macOS textutil or raise
+    if path.suffix.lower() == ".doc":
+        try:
+            tmp_docx = Path(tempfile.mktemp(suffix=".docx"))
+            subprocess.run(
+                ["textutil", "-convert", "docx", str(path), "-output", str(tmp_docx)],
+                check=True,
+                capture_output=True,
+            )
+            file_path = str(tmp_docx)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            raise ValueError(
+                f"Cannot open .doc file: {path.name}. "
+                "Convert to .docx or .pdf first, or install LibreOffice."
+            )
+
     doc = pymupdf.open(file_path)
     pages: list[Image.Image] = []
     dims: list[tuple[float, float]] = []
