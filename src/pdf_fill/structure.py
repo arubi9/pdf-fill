@@ -154,6 +154,20 @@ def _extract_with_ocr(img: Image.Image) -> list[dict]:
         return []
 
 
+_INSTRUCTION_VERBS = re.compile(
+    r"^(use|simplify|evaluate|solve|find|write|prime|graph|perform|"
+    r"factor|determine|which|how|what|compute|calculate|describe|"
+    r"identify|explain|prove|reduce|convert|express|rewrite|show|list)\b",
+    re.IGNORECASE,
+)
+
+_EXPRESSION_PATTERN = re.compile(
+    r"^[^a-zA-Z]{0,5}[\d\w\s\+\-\*/=\(\)\[\]\{\}\^<>≤≥,.]+=$"
+    r"|"
+    r"^[\d\w\s\+\-\*/=\(\)\[\]\{\}\^<>≤≥,.]+\s*=\s*$"
+)
+
+
 def classify_elements(
     lines: list[dict],
     page_width: int,
@@ -161,8 +175,14 @@ def classify_elements(
 ) -> list[dict]:
     """Classify text lines into semantic elements.
 
-    Returns list of elements with type: 'question', 'field', 'checkbox',
-    'header', 'text'. Questions include an 'answer_area' bbox.
+    Returns list of elements with types:
+    - 'question': numbered items (1. What is...) with answer_area
+    - 'instruction': task prompts (Simplify..., Solve...) that group exercises
+    - 'expression': math expressions/equations to solve (contain = sign)
+    - 'field': fill-in blanks (Name:_______)
+    - 'checkbox': [ ] Option patterns
+    - 'header': bold text or larger font
+    - 'text': everything else
     """
     elements: list[dict] = []
     avg_font = sum(l["font_size"] for l in lines) / max(len(lines), 1) if lines else 12.0
@@ -203,13 +223,12 @@ def classify_elements(
             })
             continue
 
-        # --- Question detection: starts with number. ---
+        # --- Numbered question detection: starts with number. ---
         question_match = re.match(r'^(\d+)\.\s*(.*)', text)
         if question_match:
             num = int(question_match.group(1))
             q_text = question_match.group(2).strip()
 
-            # Compute answer area: space between this line's bottom and next element's top
             next_top = page_height
             for j in range(i + 1, len(lines)):
                 next_bbox = lines[j]["bbox"]
@@ -238,6 +257,84 @@ def classify_elements(
                 "bbox": bbox,
             })
             continue
+
+        # --- Instruction detection: imperative task prompts ---
+        # "Simplify the following...", "Solve and graph...", "Find the slope..."
+        # Also catches lines ending with ":" as instructions
+        text_stripped = text.rstrip()
+        if _INSTRUCTION_VERBS.match(text_stripped) or (
+            text_stripped.endswith(":") and len(text_stripped) > 10
+        ):
+            # Collect exercises that follow this instruction until the next instruction/header
+            exercise_bboxes = []
+            for j in range(i + 1, len(lines)):
+                nxt = lines[j]
+                nxt_text = nxt["text"].rstrip()
+                # Stop at next instruction, header, or large gap section
+                if _INSTRUCTION_VERBS.match(nxt_text):
+                    break
+                if nxt.get("is_bold") or nxt.get("font_size", 0) > avg_font * 1.3:
+                    break
+                exercise_bboxes.append(nxt["bbox"])
+
+            # The work area spans from after this instruction to the last exercise
+            if exercise_bboxes:
+                work_area = {
+                    "bbox": [
+                        bbox[0],
+                        bbox[3] + 2,
+                        max(bbox[2], page_width - bbox[0]),
+                        exercise_bboxes[-1][3] + 2,
+                    ],
+                }
+            else:
+                # No exercises found — answer area is whitespace below
+                next_top = page_height
+                for j in range(i + 1, len(lines)):
+                    gap = lines[j]["bbox"][1] - bbox[3]
+                    if gap > 5:
+                        next_top = lines[j]["bbox"][1]
+                        break
+                work_area = {
+                    "bbox": [bbox[0], bbox[3] + 2, max(bbox[2], page_width - bbox[0]), next_top - 2],
+                }
+
+            elements.append({
+                "type": "instruction",
+                "text": text,
+                "bbox": bbox,
+                "work_area": work_area,
+            })
+            continue
+
+        # --- Expression detection: math with = sign, short ---
+        if "=" in text and len(text) < 60:
+            # Check it looks like a math expression (has operators or variables)
+            has_math = bool(re.search(r'[\d\w]+\s*[+\-*/^=<>≤≥]', text))
+            if has_math:
+                # Answer area: to the right of = or below the expression
+                eq_pos = text.rindex("=")
+                char_ratio = (eq_pos + 1) / max(len(text), 1)
+                answer_x = bbox[0] + int((bbox[2] - bbox[0]) * char_ratio)
+
+                # Also compute space below for multi-line answers
+                next_top = page_height
+                for j in range(i + 1, len(lines)):
+                    gap = lines[j]["bbox"][1] - bbox[3]
+                    if gap > 5:
+                        next_top = lines[j]["bbox"][1]
+                        break
+
+                elements.append({
+                    "type": "expression",
+                    "text": text,
+                    "bbox": bbox,
+                    "answer_area": {
+                        "inline": [answer_x + 5, bbox[1], page_width - bbox[0], bbox[3]],
+                        "below": [bbox[0], bbox[3] + 2, max(bbox[2], page_width - bbox[0]), next_top - 2],
+                    },
+                })
+                continue
 
         # --- Default: plain text ---
         elements.append({
