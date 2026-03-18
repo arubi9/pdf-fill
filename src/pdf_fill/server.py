@@ -19,14 +19,25 @@ from pdf_fill.drawing import (
     fill_checkbox_on_image,
     draw_path_on_image,
     color_fill_on_image,
+    measure_text_bbox as _measure_text,
 )
 from pdf_fill.export import export_as_pdf, export_as_image
+from pdf_fill.structure import extract_text_lines, classify_elements
 
 mcp = FastMCP(
     "pdf-fill",
     instructions=(
-        "Document analysis and filling server. Open a document with open_document, "
-        "view pages with render_page, draw on them, then save with save_document."
+        "Document analysis and filling server. Workflow:\n"
+        "1. open_document — opens file and returns structural analysis (questions, fields, checkboxes with pixel coords)\n"
+        "2. render_page — see the page visually\n"
+        "3. render_page_annotated — see detected elements highlighted (questions=blue, answers=green, checkboxes=orange)\n"
+        "4. get_page_structure — get element coordinates for any page\n"
+        "5. measure_text — check if text fits before drawing\n"
+        "6. draw_text / fill_checkbox / draw_shape — draw using coordinates from structure analysis\n"
+        "7. save_document — export with preserved quality\n\n"
+        "IMPORTANT: Always use get_page_structure or open_document output to get exact coordinates. "
+        "Never guess pixel positions. For questions, draw answers in the answer_area bbox. "
+        "For fields, draw in the fill_area bbox. For checkboxes, use the checkbox center coordinates."
     ),
 )
 
@@ -45,19 +56,51 @@ def _pil_to_mcp_image(img) -> Image:
 # --- Document management tools ---
 
 
+def _analyze_page_structure(page_num: int = 0) -> list[dict]:
+    """Extract and classify page structure, with caching."""
+    cached = _state.get_structure(page_num)
+    if cached is not None:
+        return cached
+
+    page_img = _state.get_page(page_num)
+    w, h = page_img.size
+    lines = extract_text_lines(
+        _state.source_path,
+        page_num=page_num,
+        dpi=_state.render_dpi,
+        fallback_image=page_img,
+    )
+    elements = classify_elements(lines, page_width=w, page_height=h)
+    _state.set_structure(page_num, elements)
+    return elements
+
+
 @mcp.tool()
 def open_document(file_path: str) -> str:
     """Open a PDF, DOCX, or image file for editing.
 
-    Returns page count and dimensions of the first page.
+    Returns page count, dimensions, and a structural analysis of the first page
+    including detected questions, fields, checkboxes, headers, and answer areas
+    with pixel-accurate bounding boxes.
     """
     global _state
     _state = DocumentState()
-    pages = render_file(file_path)
+    pages, dims = render_file(file_path, return_dimensions=True)
     fmt = detect_format(file_path)
-    _state.load_pages(pages, source_path=file_path, source_format=fmt)
+    _state.load_pages(pages, source_path=file_path, source_format=fmt,
+                      page_dimensions=dims)
+
     w, h = pages[0].size
-    return f"Opened {Path(file_path).name}: {len(pages)} page(s), first page {w}x{h}px"
+    structure = _analyze_page_structure(0)
+
+    result = {
+        "file": Path(file_path).name,
+        "pages": len(pages),
+        "page_size_px": f"{w}x{h}",
+        "page_size_pt": f"{dims[0][0]:.0f}x{dims[0][1]:.0f}",
+        "elements": structure,
+    }
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
@@ -85,6 +128,82 @@ def undo() -> str:
 
 
 @mcp.tool()
+def get_page_structure(page_number: int = 0) -> str:
+    """Get the structural analysis of a page.
+
+    Returns JSON with classified elements: questions (with answer areas),
+    fields (with fill areas), checkboxes, headers, and plain text.
+    Each element includes pixel-accurate bounding boxes.
+
+    Args:
+        page_number: Page to analyze (0-indexed)
+    """
+    _state.go_to_page(page_number)
+    elements = _analyze_page_structure(page_number)
+    return json.dumps({"page": page_number, "elements": elements}, indent=2)
+
+
+@mcp.tool()
+def measure_text(text: str, font_size: int = 16) -> str:
+    """Measure the pixel dimensions of text before drawing it.
+
+    Use this to check if text will fit in an answer area before drawing.
+
+    Args:
+        text: The text to measure
+        font_size: Font size in pixels
+    """
+    dims = _measure_text(text, font_size)
+    return json.dumps(dims)
+
+
+@mcp.tool()
+def render_page_annotated(page_number: int = 0) -> Image:
+    """Render a page with colored overlays showing detected elements.
+
+    Questions = blue outlines, answer areas = green fills,
+    checkboxes = orange outlines, fields = purple outlines.
+    Useful for verifying structure detection before filling.
+
+    Args:
+        page_number: Page to render (0-indexed)
+    """
+    _state.go_to_page(page_number)
+    page = _state.get_page().copy()
+    elements = _analyze_page_structure(page_number)
+
+    for el in elements:
+        bbox = el.get("bbox", [])
+        if not bbox or len(bbox) < 4:
+            continue
+
+        if el["type"] == "question":
+            page = draw_shape_on_image(
+                page, "rectangle", bbox[0], bbox[1], bbox[2], bbox[3],
+                outline_color="blue", stroke_width=1,
+            )
+            aa = el.get("answer_area", {}).get("bbox")
+            if aa:
+                page = draw_highlight_on_image(
+                    page, aa[0], aa[1], aa[2], aa[3],
+                    color="green", opacity=0.15,
+                )
+        elif el["type"] == "checkbox":
+            page = draw_shape_on_image(
+                page, "rectangle", bbox[0], bbox[1], bbox[2], bbox[3],
+                outline_color="orange", stroke_width=2,
+            )
+        elif el["type"] == "field":
+            fa = el.get("fill_area", bbox)
+            page = draw_highlight_on_image(
+                page, fa[0], fa[1], fa[2], fa[3],
+                color="purple", opacity=0.15,
+            )
+
+    return _pil_to_mcp_image(page)
+
+
+@mcp.tool()
 def save_document(output_path: str, format: str = "auto") -> str:
     """Save the edited document.
 
@@ -105,7 +224,7 @@ def save_document(output_path: str, format: str = "auto") -> str:
             fmt = "png"
 
     if fmt == "pdf":
-        export_as_pdf(pages, output_path)
+        export_as_pdf(pages, output_path, page_dimensions=_state.page_dimensions)
     else:
         export_as_image(pages, output_path)
     return f"Saved to {output_path}"
