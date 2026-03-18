@@ -86,6 +86,8 @@ def open_document(file_path: str) -> str:
     global _state
     _state = DocumentState()
     pages, dims = render_file(file_path, return_dimensions=True)
+    if not pages:
+        return json.dumps({"error": f"No pages found in {file_path}"})
     fmt = detect_format(file_path)
     _state.load_pages(pages, source_path=file_path, source_format=fmt,
                       page_dimensions=dims)
@@ -161,9 +163,10 @@ def measure_text(text: str, font_size: int = 16) -> str:
 def render_page_annotated(page_number: int = 0) -> Image:
     """Render a page with colored overlays showing detected elements.
 
-    Questions = blue outlines, answer areas = green fills,
-    checkboxes = orange outlines, fields = purple outlines.
-    Useful for verifying structure detection before filling.
+    Questions = blue outlines + green answer areas,
+    Instructions = cyan outlines + green work areas,
+    Expressions = red outlines + yellow answer areas,
+    Checkboxes = orange outlines, Fields = purple fills.
 
     Args:
         page_number: Page to render (0-indexed)
@@ -187,6 +190,29 @@ def render_page_annotated(page_number: int = 0) -> Image:
                 page = draw_highlight_on_image(
                     page, aa[0], aa[1], aa[2], aa[3],
                     color="green", opacity=0.15,
+                )
+        elif el["type"] == "instruction":
+            page = draw_shape_on_image(
+                page, "rectangle", bbox[0], bbox[1], bbox[2], bbox[3],
+                outline_color="cyan", stroke_width=2,
+            )
+            wa = el.get("work_area", {}).get("bbox")
+            if wa:
+                page = draw_highlight_on_image(
+                    page, wa[0], wa[1], wa[2], wa[3],
+                    color="green", opacity=0.1,
+                )
+        elif el["type"] == "expression":
+            page = draw_shape_on_image(
+                page, "rectangle", bbox[0], bbox[1], bbox[2], bbox[3],
+                outline_color="red", stroke_width=1,
+            )
+            aa = el.get("answer_area", {})
+            inline = aa.get("inline")
+            if inline:
+                page = draw_highlight_on_image(
+                    page, inline[0], inline[1], inline[2], inline[3],
+                    color="yellow", opacity=0.2,
                 )
         elif el["type"] == "checkbox":
             page = draw_shape_on_image(

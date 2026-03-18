@@ -186,8 +186,11 @@ def classify_elements(
     """
     elements: list[dict] = []
     avg_font = sum(l["font_size"] for l in lines) / max(len(lines), 1) if lines else 12.0
+    skip_indices: set[int] = set()
 
     for i, line in enumerate(lines):
+        if i in skip_indices:
+            continue
         text = line["text"]
         bbox = line["bbox"]
 
@@ -265,9 +268,32 @@ def classify_elements(
         if _INSTRUCTION_VERBS.match(text_stripped) or (
             text_stripped.endswith(":") and len(text_stripped) > 10
         ):
+            # Absorb continuation lines (tiny vertical gap = same sentence wrapping)
+            full_text = text
+            last_bbox = list(bbox)
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j]
+                gap = nxt["bbox"][1] - last_bbox[3]
+                # Continuation: small gap AND doesn't start with instruction verb or number
+                if gap < 10 and not _INSTRUCTION_VERBS.match(nxt["text"].rstrip()) and not re.match(r'^\d+\.', nxt["text"]):
+                    full_text += " " + nxt["text"]
+                    last_bbox = [
+                        min(last_bbox[0], nxt["bbox"][0]),
+                        min(last_bbox[1], nxt["bbox"][1]),
+                        max(last_bbox[2], nxt["bbox"][2]),
+                        max(last_bbox[3], nxt["bbox"][3]),
+                    ]
+                    skip_indices.add(j)
+                    j += 1
+                else:
+                    break
+            text = full_text
+            bbox = last_bbox
+
             # Collect exercises that follow this instruction until the next instruction/header
             exercise_bboxes = []
-            for j in range(i + 1, len(lines)):
+            for j in range(j, len(lines)):
                 nxt = lines[j]
                 nxt_text = nxt["text"].rstrip()
                 # Stop at next instruction, header, or large gap section
